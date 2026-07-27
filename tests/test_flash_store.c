@@ -16,6 +16,7 @@ typedef struct {
     uint8_t page_a[PAGE_SIZE];
     uint8_t page_b[PAGE_SIZE];
     uint32_t fail_program_address;
+    unsigned read_count;
 } FakeFlash;
 
 static uint8_t *page_at(FakeFlash *flash, uint32_t address) {
@@ -29,10 +30,12 @@ static uint8_t *page_at(FakeFlash *flash, uint32_t address) {
 }
 
 static bool fake_read(void *context, uint32_t address, uint8_t *output, size_t length) {
-    uint8_t *page = page_at((FakeFlash *)context, address);
+    FakeFlash *flash = (FakeFlash *)context;
+    uint8_t *page = page_at(flash, address);
     if (page == NULL || length != PAGE_SIZE) {
         return false;
     }
+    flash->read_count++;
     memcpy(output, page, length);
     return true;
 }
@@ -118,8 +121,10 @@ static void test_corrupt_primary_falls_back_to_secondary(void) {
     FlashStore store = make_store(&flash, workspace);
 
     assert(FlashStore_Save(&store, 99u, input, sizeof(input)) == FLASH_STORE_OK);
-    flash.page_a[20] ^= 0x80u;
+    flash.read_count = 0;
+    flash.page_a[12] ^= 0x80u;
     assert(FlashStore_Load(&store, 99u, output, sizeof(output)) == FLASH_STORE_OK);
+    assert(flash.read_count == 2);
     assert(memcmp(output, input, sizeof(input)) == 0);
 }
 
