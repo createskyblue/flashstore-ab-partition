@@ -1,0 +1,139 @@
+#include "flash_store.h"
+
+#include <string.h>
+
+enum {
+    FLASH_STORE_HEADER_SIZE = 12,
+};
+
+static const uint32_t FLASH_STORE_MAGIC = 0x46534142u;
+
+static void write_u32(uint8_t *destination, uint32_t value) {
+    memcpy(destination, &value, sizeof(value));
+}
+
+static uint32_t read_u32(const uint8_t *source) {
+    uint32_t value;
+    memcpy(&value, source, sizeof(value));
+    return value;
+}
+
+static uint32_t crc32(const uint8_t *data, size_t size) {
+    uint32_t crc = 0xFFFFFFFFu;
+    for (size_t i = 0; i < size; ++i) {
+        crc ^= data[i];
+        for (unsigned bit = 0; bit < 8; ++bit) {
+            uint32_t mask = (uint32_t)-(int32_t)(crc & 1u);
+            crc = (crc >> 1) ^ (0xEDB88320u & mask);
+        }
+    }
+    return ~crc;
+}
+
+static void obfuscate(uint8_t *data, size_t size, uint32_t key) {
+    uint32_t state = key == 0 ? 0x9E3779B9u : key;
+    for (size_t i = 0; i < size; ++i) {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        data[i] ^= (uint8_t)state;
+    }
+}
+
+static void encode_page(FlashStore *store, uint32_t key, const uint8_t *data, size_t size) {
+    uint8_t *page = store->config.workspace;
+    memset(page, 0xFF, store->config.page_size);
+    write_u32(page, FLASH_STORE_MAGIC);
+    write_u32(page + 4, (uint32_t)size);
+    write_u32(page + 8, crc32(data, size));
+    memcpy(page + FLASH_STORE_HEADER_SIZE, data, size);
+    obfuscate(page + FLASH_STORE_HEADER_SIZE, size, key);
+}
+
+static bool decode_page(FlashStore *store, uint32_t key, uint8_t *data, size_t size) {
+    uint8_t *page = store->config.workspace;
+    if (read_u32(page) != FLASH_STORE_MAGIC || read_u32(page + 4) != size) {
+        return false;
+    }
+
+    memcpy(data, page + FLASH_STORE_HEADER_SIZE, size);
+    obfuscate(data, size, key);
+    return read_u32(page + 8) == crc32(data, size);
+}
+
+static bool write_page(FlashStore *store, uint32_t address) {
+    return store->config.io.erase(store->config.context, address, store->config.page_size) &&
+           store->config.io.program(
+               store->config.context,
+               address,
+               store->config.workspace,
+               store->config.page_size
+           );
+}
+
+FlashStore_Status FlashStore_Init(FlashStore *store, const FlashStore_Config *config) {
+    if (store == NULL || config == NULL || config->io.read == NULL ||
+        config->io.erase == NULL || config->io.program == NULL ||
+        config->page_a_address == config->page_b_address ||
+        config->page_size <= FLASH_STORE_HEADER_SIZE || config->workspace == NULL ||
+        config->workspace_size < config->page_size) {
+        return FLASH_STORE_ERROR_ARGUMENT;
+    }
+
+    store->config = *config;
+    return FLASH_STORE_OK;
+}
+
+size_t FlashStore_MaxDataSize(const FlashStore *store) {
+    if (store == NULL || store->config.page_size <= FLASH_STORE_HEADER_SIZE) {
+        return 0;
+    }
+    return store->config.page_size - FLASH_STORE_HEADER_SIZE;
+}
+
+FlashStore_Status FlashStore_Save(
+    FlashStore *store,
+    uint32_t key,
+    const uint8_t *data,
+    size_t size
+) {
+    if (store == NULL || data == NULL || size == 0 || size > FlashStore_MaxDataSize(store)) {
+        return FLASH_STORE_ERROR_ARGUMENT;
+    }
+
+    encode_page(store, key, data, size);
+    if (!write_page(store, store->config.page_a_address)) {
+        return FLASH_STORE_ERROR_WRITE;
+    }
+    if (!write_page(store, store->config.page_b_address)) {
+        return FLASH_STORE_ERROR_WRITE;
+    }
+    return FLASH_STORE_OK;
+}
+
+FlashStore_Status FlashStore_Load(
+    FlashStore *store,
+    uint32_t key,
+    uint8_t *data,
+    size_t size
+) {
+    if (store == NULL || data == NULL || size == 0 || size > FlashStore_MaxDataSize(store)) {
+        return FLASH_STORE_ERROR_ARGUMENT;
+    }
+
+    const uint32_t addresses[] = {
+        store->config.page_a_address,
+        store->config.page_b_address,
+    };
+    for (size_t i = 0; i < sizeof(addresses) / sizeof(addresses[0]); ++i) {
+        if (store->config.io.read(
+                store->config.context,
+                addresses[i],
+                store->config.workspace,
+                store->config.page_size
+            ) && decode_page(store, key, data, size)) {
+            return FLASH_STORE_OK;
+        }
+    }
+    return FLASH_STORE_ERROR_NO_VALID_DATA;
+}
