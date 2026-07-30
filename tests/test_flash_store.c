@@ -72,7 +72,6 @@ static void init_config(FlashStore_Config *config, FakeFlash *flash,
     config->page_b_address  = PAGE_B_ADDRESS;
     config->page_size       = PAGE_SIZE;
     config->workspace       = workspace;
-    config->workspace_size  = PAGE_SIZE;
     if (cipher_key != NULL) {
         config->encrypt    = xxtea_encrypt;
         config->decrypt    = xxtea_decrypt;

@@ -85,7 +85,6 @@ void app_settings_example(void) {
         .page_b_address = FLASH_PAGE_B_ADDRESS,
         .page_size = FLASH_PAGE_SIZE,
         .workspace = workspace,
-        .workspace_size = sizeof(workspace),
         .encrypt    = xxtea_encrypt,
         .decrypt    = xxtea_decrypt,
         .cipher_key = cipher_key,

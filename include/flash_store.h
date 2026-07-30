@@ -31,8 +31,7 @@ typedef struct {
     uint32_t           page_a_address;
     uint32_t           page_b_address;
     size_t             page_size;
-    uint8_t           *workspace;
-    size_t             workspace_size;
+    uint8_t           *workspace;   /* must be >= page_size bytes */
     FlashStore_Cipher  encrypt;
     FlashStore_Cipher  decrypt;
     const uint32_t    *cipher_key;

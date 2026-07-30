@@ -98,8 +98,7 @@ FlashStore_Status FlashStore_Init(FlashStore *store,
         config->io.erase == NULL || config->io.program == NULL ||
         config->page_a_address == config->page_b_address ||
         config->page_size <= FLASH_STORE_HEADER_SIZE ||
-        config->workspace == NULL ||
-        config->workspace_size < config->page_size) {
+        config->workspace == NULL) {
         return FLASH_STORE_ERROR_ARGUMENT;
     }
 
