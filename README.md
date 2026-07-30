@@ -17,7 +17,7 @@ A/B 双页 Flash 存储，面向小型 MCU。零依赖，28 bytes RAM。
 
 ## 5 分钟接入
 
-1. 复制 `include/flash_store.h` 和 `src/flash_store.c` 到工程
+1. 复制 `include/flash_store.h`、`src/flash_store.c`。需要加密再加 `chacha20` 或 `xxtea`
 2. 实现 3 个回调：
 
 ```c
@@ -50,7 +50,7 @@ FlashStore_Save(&store, data, len);   // 写
 FlashStore_Load(&store, data, len);   // 读
 ```
 
-> 要加密？简单混淆用自带的 [XXTEA](src/xxtea.c)，零额外开销。愿意多花 ~2KB Flash + ~1KB RAM，上 [ChaCha20](https://en.wikipedia.org/wiki/Salsa20#ChaCha_variant)（无硬件 AES 的 MCU 上比 AES 快得多）。加密都在外部做：`encrypt → FlashStore_Save` / `FlashStore_Load → decrypt`。
+> 需要加密？推荐 [ChaCha20](src/chacha20.c)——RFC 8439 标准，流密码不分块不要求对齐。实测 Cortex-M0 -Os：700B Flash + ~200B 栈，0 静态 RAM。极致省资源用 [XXTEA](src/xxtea.c)，仅混淆级别，要求 4 字节对齐且 ≥8 字节。加密在外部做：`encrypt → FlashStore_Save` / `FlashStore_Load → decrypt`。
 
 ## 为什么不会丢数据
 
