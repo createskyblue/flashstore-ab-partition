@@ -121,22 +121,28 @@ FlashStore_Status FlashStore_Load(FlashStore *store,
         size == 0 || size > FlashStore_MaxDataSize(store))
         return FLASH_STORE_ERROR_ARGUMENT;
 
-    /* try primary page */
-    if (load_page(store, store->config.page_a_address, data, size))
-        return FLASH_STORE_OK;
+    uint32_t a = store->config.page_a_address;
+    uint32_t b = store->config.page_b_address;
+    bool a_ok = load_page(store, a, data, size);
+    bool b_ok = load_page(store, b, data, size);
 
-    /* primary corrupt — try backup */
-    if (!load_page(store, store->config.page_b_address, data, size))
+    if (!a_ok && !b_ok)
         return FLASH_STORE_ERROR_NO_VALID_DATA;
 
+    if (a_ok && b_ok)
+        return FLASH_STORE_OK;
+
     /*
-     * Backup is good — best-effort repair of the primary.
-     * Repair failure is intentionally not reported: the caller already
-     * has valid data and the redundancy loss will self-heal on the
-     * next successful Save.  Adding a warning status here would
-     * complicate every caller's Load path for a rare edge case.
+     * One page is corrupt — re-read the good page into `data`
+     * (the bad-page load may have overwritten it), then repair.
+     * This also re-syncs after a Save interrupted mid-way.
      */
-    save_page(store, store->config.page_a_address, data, size);
+    if (a_ok) {
+        load_page(store, a, data, size);   /* re-read A over B's garbage */
+        save_page(store, b, data, size);   /* repair B */
+    } else {
+        save_page(store, a, data, size);   /* repair A (B was good, data is fine) */
+    }
 
     return FLASH_STORE_OK;
 }

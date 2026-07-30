@@ -121,6 +121,25 @@ static void test_corrupt_primary_falls_back_to_secondary(void) {
     assert(memcmp(f.page_a, f.page_b, PAGE_SIZE) == 0);
 }
 
+static void test_corrupt_backup_repairs_from_primary(void) {
+    FakeFlash f;
+    uint8_t out[4] = {0};
+    const uint8_t in[4] = {0xAA, 0xBB, 0xCC, 0xDD};
+
+    memset(&f, 0, sizeof(f));
+    FlashStore s = make_store(&f);
+
+    assert(FlashStore_Save(&s, in, sizeof(in)) == FLASH_STORE_OK);
+    /* corrupt payload on B */
+    f.page_b[HEADER_SIZE + 1] ^= 0x40u;
+    assert(memcmp(f.page_a, f.page_b, PAGE_SIZE) != 0);
+
+    assert(FlashStore_Load(&s, out, sizeof(out)) == FLASH_STORE_OK);
+    assert(memcmp(out, in, sizeof(in)) == 0);
+    /* B must be repaired from A */
+    assert(memcmp(f.page_a, f.page_b, PAGE_SIZE) == 0);
+}
+
 static void test_failed_write_A_preserves_old_B(void) {
     FakeFlash f;
     uint8_t out[4] = {0};
@@ -145,6 +164,7 @@ static void test_failed_write_A_preserves_old_B(void) {
 int main(void) {
     test_round_trip();
     test_corrupt_primary_falls_back_to_secondary();
+    test_corrupt_backup_repairs_from_primary();
     test_failed_write_A_preserves_old_B();
     puts("flash_store tests passed");
     return 0;
