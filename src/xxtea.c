@@ -1,5 +1,6 @@
 #include "xxtea.h"
 
+#include <assert.h>
 #include <string.h>
 
 #define XXTEA_DELTA 0x9E3779B9u
@@ -8,63 +9,64 @@
     ((((z) >> 5 ^ (y) << 2) + ((y) >> 3 ^ (z) << 4))                 \
      ^ (((sum) ^ (y)) + ((k)[((p) & 3) ^ (e)] ^ (z))))
 
-/*
- * XXTEA requires at least 2 words (8 bytes).  When the caller passes
- * fewer bytes we transparently pad to 8 bytes.  This is safe because
- * flash_store always operates inside a page-sized workspace — the
- * extra bytes live in the same page and survive a full-page read/write
- * round-trip.
- */
-static int xxtea_prepare(uint8_t *data, size_t *size, int encrypt) {
-    if (*size >= 8) return (int)(*size / 4);
+/* memcpy-based word access — safe on architectures that don't support
+ * unaligned loads (Cortex-M0, etc.). */
+static uint32_t ld32(const uint8_t *p) {
+    uint32_t v;
+    memcpy(&v, p, sizeof(v));
+    return v;
+}
 
-    if (encrypt) {
-        memset(data + *size, 0, 8 - *size);
-    }
-    *size = 8;
-    return 2;
+static void st32(uint8_t *p, uint32_t v) {
+    memcpy(p, &v, sizeof(v));
 }
 
 void xxtea_encrypt(uint8_t *data, size_t size, const uint32_t k[4]) {
-    uint32_t *v = (uint32_t *)data;
-    int n = xxtea_prepare(data, &size, 1);
-    uint32_t y, z, sum;
-    unsigned rounds, e;
-    int p;
+    assert(data != NULL);
+    assert((uintptr_t)data % 4 == 0);
+    assert(size >= 8 && size % 4 == 0);
 
-    rounds = 6 + 52 / n;
-    sum = 0;
-    z = v[n - 1];
+    int n = (int)(size / 4);
+    unsigned rounds = 6 + 52 / n;
+    uint32_t y, z, sum = 0;
+
+    z = ld32(data + (n - 1) * 4);
     do {
         sum += XXTEA_DELTA;
-        e = (sum >> 2) & 3;
+        unsigned e = (sum >> 2) & 3;
+        int p;
         for (p = 0; p < n - 1; p++) {
-            y = v[p + 1];
-            z = v[p] += XXTEA_MX(z, y, p, sum, e, k);
+            y = ld32(data + (p + 1) * 4);
+            z = ld32(data + p * 4) + XXTEA_MX(z, y, p, sum, e, k);
+            st32(data + p * 4, z);
         }
-        y = v[0];
-        z = v[n - 1] += XXTEA_MX(z, y, n - 1, sum, e, k);
+        y = ld32(data);
+        z = ld32(data + (n - 1) * 4) + XXTEA_MX(z, y, n - 1, sum, e, k);
+        st32(data + (n - 1) * 4, z);
     } while (--rounds);
 }
 
 void xxtea_decrypt(uint8_t *data, size_t size, const uint32_t k[4]) {
-    uint32_t *v = (uint32_t *)data;
-    int n = xxtea_prepare(data, &size, 0);
-    uint32_t y, z, sum;
-    unsigned rounds, e;
-    int p;
+    assert(data != NULL);
+    assert((uintptr_t)data % 4 == 0);
+    assert(size >= 8 && size % 4 == 0);
 
-    rounds = 6 + 52 / n;
-    sum = rounds * XXTEA_DELTA;
-    y = v[0];
+    int n = (int)(size / 4);
+    unsigned rounds = 6 + 52 / n;
+    uint32_t y, z, sum = rounds * XXTEA_DELTA;
+
+    y = ld32(data);
     do {
-        e = (sum >> 2) & 3;
+        unsigned e = (sum >> 2) & 3;
+        int p;
         for (p = n - 1; p > 0; p--) {
-            z = v[p - 1];
-            y = v[p] -= XXTEA_MX(z, y, p, sum, e, k);
+            z = ld32(data + (p - 1) * 4);
+            y = ld32(data + p * 4) - XXTEA_MX(z, y, p, sum, e, k);
+            st32(data + p * 4, y);
         }
-        z = v[n - 1];
-        y = v[0] -= XXTEA_MX(z, y, 0, sum, e, k);
+        z = ld32(data + (n - 1) * 4);
+        y = ld32(data) - XXTEA_MX(z, y, 0, sum, e, k);
+        st32(data, y);
         sum -= XXTEA_DELTA;
     } while (--rounds);
 }

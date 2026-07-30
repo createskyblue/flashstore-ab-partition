@@ -7,10 +7,13 @@
 /*
  * XXTEA — Corrected Block TEA
  * David Wheeler & Roger Needham, Cambridge, 1998
- * http://www.cix.co.uk/~klockstone/xxtea.pdf
  *
- * `data` must be word-aligned (size is a multiple of 4) and at least
- * 8 bytes.  The caller is responsible for padding.
+ * Preconditions (enforced by assert in debug builds):
+ *   - `data` must be 4-byte aligned
+ *   - `size` must be a multiple of 4 and >= 8 bytes
+ *
+ * The caller is responsible for padding the input buffer before
+ * encryption and ensuring the buffer is large enough for decryption.
  */
 void xxtea_encrypt(uint8_t *data, size_t size, const uint32_t k[4]);
 void xxtea_decrypt(uint8_t *data, size_t size, const uint32_t k[4]);

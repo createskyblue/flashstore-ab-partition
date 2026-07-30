@@ -78,7 +78,17 @@ FlashStore_Status FlashStore_Init(FlashStore *store,
     if (store == NULL || config == NULL || config->io.read == NULL ||
         config->io.erase == NULL || config->io.program == NULL ||
         config->page_a_address == config->page_b_address ||
-        config->page_size <= FLASH_STORE_HEADER_SIZE) {
+        config->page_size <= FLASH_STORE_HEADER_SIZE ||
+        config->page_a_address % config->page_size != 0 ||
+        config->page_b_address % config->page_size != 0) {
+        return FLASH_STORE_ERROR_ARGUMENT;
+    }
+
+    /* check that the two pages don't overlap */
+    uint32_t a_end = config->page_a_address + config->page_size;
+    uint32_t b_end = config->page_b_address + config->page_size;
+    if ((config->page_a_address < b_end &&
+         config->page_b_address < a_end)) {
         return FLASH_STORE_ERROR_ARGUMENT;
     }
 
@@ -119,7 +129,13 @@ FlashStore_Status FlashStore_Load(FlashStore *store,
     if (!load_page(store, store->config.page_b_address, data, size))
         return FLASH_STORE_ERROR_NO_VALID_DATA;
 
-    /* backup is good — repair primary from it */
+    /*
+     * Backup is good — best-effort repair of the primary.
+     * Repair failure is intentionally not reported: the caller already
+     * has valid data and the redundancy loss will self-heal on the
+     * next successful Save.  Adding a warning status here would
+     * complicate every caller's Load path for a rare edge case.
+     */
     save_page(store, store->config.page_a_address, data, size);
 
     return FLASH_STORE_OK;
