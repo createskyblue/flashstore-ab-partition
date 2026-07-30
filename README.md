@@ -54,65 +54,41 @@ FlashStore_Load(&store, data, len);   // 读
 
 ## 为什么不会丢数据
 
-### 写顺序：A 先，B 后
+**A 写完才写 B。** 任意时刻断电，至少一份完整数据在 flash 上。
 
 ```
-Save:
-  ① erase A  →  失败 → 立即返回，B 完好（旧数据还在）
-  ② write A  →  失败 → 同上
-  ③ erase B  →  失败 → A 已有新数据，下次 Load 会读到 A
-  ④ write B  →  失败 → 同上
+Save:  A 先 → B 后     Load: 读两页 → CRC 验 → 返回好的 → 顺手修坏的
 ```
 
-任意时刻断电，要么拿到旧数据，要么拿到新数据。不存在"半新半旧"。
+| 断电在… | A | B | Load 结果 |
+|---------|----|----|----------|
+| 空闲 | v2 | v2 | 返回 v2 |
+| 写 A 中途 | 坏 | v1 | 返回 v1，修 A |
+| A 完成，B 前 | v2 (CRC=c2) | v1 (CRC=c1) | CRC 不同→A 新→返回 v2，修 B |
+| 写 B 中途 | v2 | 坏 | 返回 v2，下次修 B |
+| 两页都坏 | 坏 | 坏 | `ERROR_NO_VALID_DATA` |
 
-### CRC 裁决新旧
-
-A 永远先于 B 写入。两页 CRC 都正确但内容不同 → A 必然更新。
-
-```
-Save 前:  A=v1 (CRC=c1)  B=v1 (CRC=c1)
-
- ① write A(v2, CRC=c2)
- ② ⚡ 断电！B 没碰
-
-断电后:  A=v2  B=v1  ← 两页 CRC 都对，但不同
-
-Load:
-  读 A(→c2) → 读 B(→c1) → c2≠c1 → A 更新 → 重读 A → 修复 B ✓
-```
-
-CRC 相同时跳过重读，零额外开销：
-
-```
-Load 决策:
-  ├─ A OK, B OK, CRC 相同 ──→ 直接返回，啥也不做
-  ├─ A OK, B OK, CRC 不同 ──→ 重读 A → 修复 B
-  ├─ A OK, B 坏 ──→ 重读 A（B 覆盖了 buffer）→ 修复 B
-  ├─ A 坏, B OK ──→ data 已是 B 的数据，直接修复 A
-  └─ A 坏, B 坏 ──→ 返回错误
-```
-
-### 修复失败？
-
-修复失败？出现 `WARN_REPAIR_FAILED` 说明你的 IO 接口或硬件有问题——能读到好页说明 read 正常，能写入说明 erase/program 以前也能用。正常运行时修复不应该失败，收到这个状态码应检查硬件或 IO 实现。
+> `WARN_REPAIR_FAILED`？修复时 erase/program 失败，正常不会发生——收到应检查硬件。
 
 ## Header 结构
 
-每页 = **12 字节 header + payload**
+每页 12 字节 header + payload：
 
-```
-[0..3]  magic   0x46534142
-[4..7]  length  payload 大小
-[8..11] crc32   payload CRC32
-```
+| 偏移 | 字段 | 含义 |
+|------|------|------|
+| 0 | magic (4B) | `0x46534142` |
+| 4 | length (4B) | payload 大小 |
+| 8 | crc32 (4B) | payload CRC32 |
 
-## 约束
+## 资源占用（Cortex-M0 -Os 实测）
 
-- 两页地址必须不同、不重叠、页对齐
-- 不是线程安全 / 中断可重入
-- 最大 payload：`page_size - 12`
-- FlashStore 结构体：28 bytes（不含用户 buffer）
+| 模块 | Flash | 静态 RAM | 栈 |
+|------|-------|----------|-----|
+| flash_store | 596 bytes | 28 bytes | ~20 bytes |
+| chacha20 | 700 bytes | 0 | ~200 bytes |
+| xxtea | 737 bytes | 0 | ~0 |
+
+> flash_store 明细：Load 158B / Init 108B / load_page 104B / save_page 92B / Save 66B / CRC32 52B。按需链接，不用就不占。
 
 ## 状态码
 
