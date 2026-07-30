@@ -111,13 +111,16 @@ FlashStore_Status FlashStore_Load(FlashStore *store,
         size == 0 || size > FlashStore_MaxDataSize(store))
         return FLASH_STORE_ERROR_ARGUMENT;
 
-    const uint32_t addresses[] = {
-        store->config.page_a_address,
-        store->config.page_b_address,
-    };
-    for (size_t i = 0; i < sizeof(addresses) / sizeof(addresses[0]); ++i) {
-        if (load_page(store, addresses[i], data, size))
-            return FLASH_STORE_OK;
-    }
-    return FLASH_STORE_ERROR_NO_VALID_DATA;
+    /* try primary page */
+    if (load_page(store, store->config.page_a_address, data, size))
+        return FLASH_STORE_OK;
+
+    /* primary corrupt — try backup */
+    if (!load_page(store, store->config.page_b_address, data, size))
+        return FLASH_STORE_ERROR_NO_VALID_DATA;
+
+    /* backup is good — repair primary from it */
+    save_page(store, store->config.page_a_address, data, size);
+
+    return FLASH_STORE_OK;
 }

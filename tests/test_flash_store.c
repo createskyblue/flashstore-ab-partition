@@ -117,6 +117,8 @@ static void test_corrupt_primary_falls_back_to_secondary(void) {
     assert(FlashStore_Load(&s, out, sizeof(out)) == FLASH_STORE_OK);
     assert(f.read_count == 4);         /* header A + data A + header B + data B */
     assert(memcmp(out, in, sizeof(in)) == 0);
+    /* primary must be repaired from backup */
+    assert(memcmp(f.page_a, f.page_b, PAGE_SIZE) == 0);
 }
 
 static void test_failed_write_A_preserves_old_B(void) {
