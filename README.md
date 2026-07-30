@@ -50,7 +50,7 @@ FlashStore_Save(&store, data, len);   // 写
 FlashStore_Load(&store, data, len);   // 读
 ```
 
-> 要加密？在外部做：`xxtea_encrypt(data, len, key)` → `FlashStore_Save` → `FlashStore_Load` → `xxtea_decrypt(data, len, key)`。仓库附带独立 [XXTEA](src/xxtea.c)，测试里有加解密用法。
+> 要加密？简单混淆用自带的 [XXTEA](src/xxtea.c)，零额外开销。愿意多花 ~2KB Flash + ~1KB RAM，上 [ChaCha20](https://en.wikipedia.org/wiki/Salsa20#ChaCha_variant)（无硬件 AES 的 MCU 上比 AES 快得多）。加密都在外部做：`encrypt → FlashStore_Save` / `FlashStore_Load → decrypt`。
 
 ## 为什么不会丢数据
 
@@ -95,7 +95,7 @@ Load 决策:
 
 ### 修复失败？
 
-返回 `FLASH_STORE_WARN_REPAIR_FAILED` —— 数据本身是对的，只是冗余没恢复。下次 Save 会自行修好。
+修复失败？出现 `WARN_REPAIR_FAILED` 说明你的 IO 接口或硬件有问题——能读到好页说明 read 正常，能写入说明 erase/program 以前也能用。正常运行时修复不应该失败，收到这个状态码应检查硬件或 IO 实现。
 
 ## Header 结构
 
