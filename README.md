@@ -1,148 +1,129 @@
 # FlashStore A/B Partition
 
-面向小型 MCU 的 A/B 双页 Flash 存储库。零依赖，不绑定 HAL，通过三个回调接入。
-**不需要工作缓冲区** — header 在栈上构建，数据直接从用户 buffer 写入 flash。
+A/B 双页 Flash 存储，面向小型 MCU。零依赖，28 bytes RAM。
 
-适合保存几十到几百字节、低频更新的配置数据。需要动态 KV、磨损均衡或
-时序数据时，应选择 FlashDB / LittleFS 等完整存储组件。
+**选哪个？**
 
-## 工作方式
+1. **FlashStore** — 几十~几百字节配置，低频更新，要可靠不丢。28 bytes RAM，无依赖。
+2. **[FlashDB](https://github.com/armink/FlashDB)** — 键值对存储，需要磨损均衡，多个配置项独立读写。
+3. **[LittleFS](https://github.com/littlefs-project/littlefs)** — 存文件、存日志、大块数据顺序写，需要文件系统接口。
 
-- 每页 = 12 字节 header（魔数 + 长度 + CRC32）+ payload。
-- 保存时先擦除再分别写入 header 和 payload，page A → page B。
-- A 页写入失败（擦除或编程）立即返回错误，不触碰 B 页。
-- 加载时先校验 A 页；A 页无效时回退 B 页。
-- **不含加密** — 加密由用户在外部处理（encrypt before Save, decrypt after Load）。
-- 仓库附带独立的 [XXTEA](src/xxtea.c) 实现（Wheeler & Needham, 1998）供加密使用。
+## 5 分钟接入
 
-## 可靠性
+1. 复制 `include/flash_store.h` 和 `src/flash_store.c` 到工程
+2. 实现 3 个回调：
 
-### 写入顺序：A 完成才动 B
-
-```
-Save:
-  ① erase A  →  失败立即返回，B 完好
-  ② write A header + data  →  失败立即返回，B 完好
-  ─── A 完整写入 ───
-  ③ erase B  →  失败：A 已有新数据，Load 会读到 A
-  ④ write B header + data  →  失败：A 已有新数据，Load 会读到 A
-  ─── 两页一致 ───
-```
-
-> 任何时候断电，要么拿到旧数据，要么拿到新数据。不存在"新旧掺杂"或"数据丢失"的窗口。
-
-### 加载 + 自动修复
-
-每次 Load 都**同时校验两页**，按三种情况处理：
-
-```
-Load:
-  读 A 的 header+data, 读 B 的 header+data
-  │
-  ├─ 两页都 OK ──────────────────→ 返回 A 的数据
-  │
-  ├─ 只有一页 OK ──→ 用好页修坏页 ──→ 返回好页的数据
-  │
-  └─ 两页都坏 ──────────────────→ 返回错误
+```c
+bool my_read(void *ctx, uint32_t addr, uint8_t *out, size_t len) {
+    memcpy(out, (void *)(uintptr_t)addr, len);  // 或 HAL 读
+    return true;
+}
+bool my_erase(void *ctx, uint32_t addr, size_t len) {
+    HAL_FLASH_ErasePage(addr);                  // 整页擦除
+    return true;
+}
+bool my_program(void *ctx, uint32_t addr, const uint8_t *data, size_t len) {
+    // 按 word 编程，或 memcpy（支持字节寻址的 flash）
+    return true;
+}
 ```
 
-| 状态 | 触发场景 | 修复动作 |
-|------|---------|---------|
-| **A OK, B OK** | 正常状态 | 无 |
-| **A OK, B 坏** | 上次 Save 写到 B 时断电，或 B 硬件故障 | 从 A 重写 B |
-| **A 坏, B OK** | A 硬件故障 / 旧数据被意外擦除 | 从 B 重写 A |
-| **两页都坏** | 完全未初始化，或硬件严重故障 | 返回错误，无法自动恢复 |
-
-- **CRC32** 覆盖整个 payload，单 bit 翻转必定检出。
-- **修复是重写整页**（erase + program），恢复后两页再次一致。
-- 修复失败不影响返回数据——调用者已经拿到了正确的 payload。
-
-### 断电时序表
-
-| 断电时机 | A 状态 | B 状态 | 下次 Load |
-|----------|--------|--------|-----------|
-| 空闲 | 好 | 好 | 读到 A（新）|
-| 擦 A 中 | 坏 | 好（旧）| 回退 B → **自动修 A** |
-| 写 A 中 | 坏 | 好（旧）| 回退 B → **自动修 A** |
-| A 完成，B 前 | 好（新）| 好（旧）| 读到 A（新）|
-| 擦 B 中 | 好（新）| 坏 | 读到 A（新）|
-| 写 B 中 | 好（新）| 坏 | 读到 A（新）→ **自动修 B** |
-
-## 接入
-
-将以下文件加入工程：
-
-```text
-include/flash_store.h    src/flash_store.c
-include/xxtea.h          src/xxtea.c        （可选，加密用）
-```
+3. 初始化并读写：
 
 ```c
 FlashStore store;
-
-FlashStore_Config config = {
-    .io = {
-        .read   = board_flash_read,
-        .erase  = board_flash_erase,
-        .program = board_flash_program,
-    },
+FlashStore_Config cfg = {
+    .io.read = my_read, .io.erase = my_erase, .io.program = my_program,
     .page_a_address = 0x0800FE00,
     .page_b_address = 0x0800FE80,
     .page_size      = 128,
 };
-
-FlashStore_Init(&store, &config);
-FlashStore_Save(&store, data, size);
-FlashStore_Load(&store, data, size);
+FlashStore_Init(&store, &cfg);
+FlashStore_Save(&store, data, len);   // 写
+FlashStore_Load(&store, data, len);   // 读
 ```
 
-加密示例（XXTEA）：
+> 要加密？在外部做：`xxtea_encrypt(data, len, key)` → `FlashStore_Save` → `FlashStore_Load` → `xxtea_decrypt(data, len, key)`。仓库附带独立 [XXTEA](src/xxtea.c)。
 
-```c
-#include "xxtea.h"
+## 为什么不会丢数据
 
-static const uint32_t key[4] = { 0x12, 0x34, 0x56, 0x78 };
+### 写顺序：A 先，B 后
 
-/* save: encrypt → store */
-xxtea_encrypt(data, padded_size, key);
-FlashStore_Save(&store, data, padded_size);
-
-/* load: load → decrypt */
-FlashStore_Load(&store, data, padded_size);
-xxtea_decrypt(data, padded_size, key);
+```
+Save:
+  ① erase A  →  失败 → 立即返回，B 完好（旧数据还在）
+  ② write A  →  失败 → 同上
+  ③ erase B  →  失败 → A 已有新数据，下次 Load 会读到 A
+  ④ write B  →  失败 → 同上
 ```
 
-完整示例见 [`examples/air001_example.c`](examples/air001_example.c)。
+任意时刻断电，要么拿到旧数据，要么拿到新数据。不存在"半新半旧"。
 
-## IO 回调约定
+### CRC 裁决新旧
 
-| 回调 | 语义 |
-|------|------|
-| `read(ctx, addr, out, len)` | 从 `addr` 读 `len` 字节到 `out`。`len` 可能小于 page_size。 |
-| `erase(ctx, addr, len)` | 擦除 `addr` 起始的 `len` 字节。`len == page_size`（整页擦除）。 |
-| `program(ctx, addr, data, len)` | 将 `data` 的 `len` 字节写入 `addr`。`len` 可能小于 page_size。 |
+A 永远先于 B 写入。两页 CRC 都正确但内容不同 → A 必然更新。
+
+```
+Save 前:  A=v1 (CRC=c1)  B=v1 (CRC=c1)
+
+ ① write A(v2, CRC=c2)
+ ② ⚡ 断电！B 没碰
+
+断电后:  A=v2  B=v1  ← 两页 CRC 都对，但不同
+
+Load:
+  读 A(→c2) → 读 B(→c1) → c2≠c1 → A 更新 → 重读 A → 修复 B ✓
+```
+
+CRC 相同时跳过重读，零额外开销：
+
+```
+Load 决策:
+  ├─ A OK, B OK, CRC 相同 ──→ 直接返回，啥也不做
+  ├─ A OK, B OK, CRC 不同 ──→ 重读 A → 修复 B
+  ├─ A OK, B 坏 ──→ 重读 A（B 覆盖了 buffer）→ 修复 B
+  ├─ A 坏, B OK ──→ data 已是 B 的数据，直接修复 A
+  └─ A 坏, B 坏 ──→ 返回错误
+```
+
+### 修复失败？
+
+返回 `FLASH_STORE_WARN_REPAIR_FAILED` —— 数据本身是对的，只是冗余没恢复。下次 Save 会自行修好。
+
+## Header 结构
+
+每页 = **12 字节 header + payload**
+
+```
+[0..3]  magic   0x46534142
+[4..7]  length  payload 大小
+[8..11] crc32   payload CRC32
+```
 
 ## 约束
 
-- 两个地址必须属于互不重叠的独立擦除页。
-- 接口不是线程安全或中断可重入的。
-- Payload 最大长度：`page_size - 12` 字节。
-- 结构体布局变化需由应用层处理版本兼容。
+- 两页地址必须不同、不重叠、页对齐
+- 不是线程安全 / 中断可重入
+- 最大 payload：`page_size - 12`
+- FlashStore 结构体：28 bytes（不含用户 buffer）
 
-## RAM 占用（32-bit MCU）
+## 状态码
 
-| 项目 | 大小 |
-|------|------|
-| `FlashStore` 结构体 | 28 bytes |
-| **总计** | **28 bytes** |
+| 返回值 | 含义 |
+|--------|------|
+| `OK` | 正常 |
+| `ERROR_ARGUMENT` | 参数错误 |
+| `ERROR_WRITE` | 擦除或编程失败 |
+| `ERROR_NO_VALID_DATA` | 两页都坏了 |
+| `WARN_REPAIR_FAILED` | 数据正确但冗余修复失败 |
 
 ## 测试
 
 ```bash
-cmake -S . -B build
-cmake --build build
-ctest --test-dir build --output-on-failure
+cmake -S . -B build && cmake --build build && ./build/flash_store_tests.exe
 ```
+
+9 个测试覆盖：正常读写、A 坏回退 B、B 坏从 A 修、CRC 裁决新旧、双页全坏、修复失败告警、参数校验、MaxDataSize。
 
 ## License
 

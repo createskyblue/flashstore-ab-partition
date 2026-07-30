@@ -64,34 +64,39 @@ typedef struct {
 } AppSettings;
 
 /*
- * Encryption is handled OUTSIDE flash_store — encrypt before Save,
- * decrypt after Load.  We use the provided workspace buffer as scratch
- * space for XXTEA (which needs word-aligned, ≥8-byte input).
+ * Encryption is done OUTSIDE flash_store — encrypt before Save,
+ * decrypt after Load.  The cipher_workspace buffer serves as scratch
+ * space for XXTEA (which needs word-aligned, ≥8-byte input) and also
+ * holds the ciphertext for Save/Load.
  */
-static void encrypt_settings(uint8_t *workspace,
-                             AppSettings *s, const uint32_t key[4]) {
+
+/* Encrypt settings → workspace.  Returns the padded ciphertext length. */
+static size_t encrypt_settings(uint8_t *workspace, size_t workspace_size,
+                               const AppSettings *s, const uint32_t key[4]) {
     size_t padded = ((sizeof(*s) + 3) / 4) * 4;
     if (padded < 8) padded = 8;
+    /* caller guarantees workspace_size ≥ padded */
+    (void)workspace_size;
     memcpy(workspace, s, sizeof(*s));
     memset(workspace + sizeof(*s), 0, padded - sizeof(*s));
     xxtea_encrypt(workspace, padded, key);
-    memcpy(s, workspace, padded);   /* copy ciphertext back */
+    return padded;
 }
 
+/* Decrypt workspace in-place → copy plaintext to s. */
 static void decrypt_settings(uint8_t *workspace,
                              AppSettings *s, const uint32_t key[4]) {
     size_t padded = ((sizeof(*s) + 3) / 4) * 4;
     if (padded < 8) padded = 8;
-    memcpy(workspace, s, padded);
-    xxtea_decrypt(workspace, padded, key);
-    memcpy(s, workspace, sizeof(*s));  /* copy plaintext back */
+    xxtea_decrypt(workspace, padded, key);   /* decrypt in-place */
+    memcpy(s, workspace, sizeof(*s));         /* extract plaintext */
 }
 
 void app_settings_example(void) {
     const uint32_t key[4] = {
         0x12345678, 0x9ABCDEF0, 0x0FEDCBA9, 0x87654321
     };
-    /* XXTEA scratch buffer — only needed if you use encryption */
+    /* XXTEA scratch + ciphertext buffer — only needed for encryption */
     _Alignas(uint32_t) static uint8_t cipher_workspace[128];
 
     FlashStore store;
@@ -114,13 +119,20 @@ void app_settings_example(void) {
 
     if (FlashStore_Init(&store, &config) != FLASH_STORE_OK) return;
 
-    /* save: encrypt → store */
-    encrypt_settings(cipher_workspace, &settings, key);
-    (void)FlashStore_Save(&store, (const uint8_t *)&settings,
-                          sizeof(settings));
+    /* ── save: encrypt → store ── */
+    {
+        size_t cipher_size = encrypt_settings(cipher_workspace,
+                                              sizeof(cipher_workspace),
+                                              &settings, key);
+        (void)FlashStore_Save(&store, cipher_workspace, cipher_size);
+    }
 
-    /* load: load → decrypt */
-    (void)FlashStore_Load(&store, (uint8_t *)&settings,
-                          sizeof(settings));
-    decrypt_settings(cipher_workspace, &settings, key);
+    /* ── load: load → decrypt ── */
+    {
+        size_t cipher_size = encrypt_settings(cipher_workspace,
+                                              sizeof(cipher_workspace),
+                                              &settings, key);
+        (void)FlashStore_Load(&store, cipher_workspace, cipher_size);
+        decrypt_settings(cipher_workspace, &settings, key);
+    }
 }
