@@ -2,7 +2,9 @@
 
 # FlashStore A/B Partition
 
-A/B dual-page flash storage for small MCUs. Zero dependencies. 28 bytes RAM.
+A/B dual-page flash storage for small MCUs. Zero dependencies. Stateless.
+
+https://github.com/createskyblue/flashstore-ab-partition
 
 **Which to choose?**
 
@@ -13,8 +15,17 @@ A/B dual-page flash storage for small MCUs. Zero dependencies. 28 bytes RAM.
 | I/O | Save/Load whole blob | Set/Get by key | Open/Read/Write |
 | Wear leveling | ❌ | ✅ | ✅ |
 | Power-loss safe | ✅ Dual-page | ✅ Transaction log | ✅ |
-| RAM | 28 bytes | Very low | Higher (buffers) |
 | Best for | Config data, infrequent writes | Multiple KVs, independent updates | Files, logs, large data |
+
+## Resource usage (Cortex-M0 -Os measured)
+
+| Module | Flash | Static RAM | Stack |
+|------|-------|----------|-----|
+| flash_store | 500 bytes | 0 | ~20 bytes |
+| chacha20 *(optional)* | 700 bytes | 0 | ~200 bytes |
+| xxtea *(optional)* | 737 bytes | 0 | ~0 |
+
+> flash_store breakdown: Load 158B / load_page 108B / save_page 100B / Save 66B / CRC32 52B / MaxDataSize 16B. Link what you use.
 
 ## Quick start
 
@@ -39,16 +50,15 @@ bool my_program(void *ctx, uint32_t addr, const uint8_t *data, size_t len) {
 3. Init and go:
 
 ```c
-FlashStore store;
-FlashStore_Config cfg = {
-    .io.read = my_read, .io.erase = my_erase, .io.program = my_program,
-    .page_a_address = 0x0800FE00,
-    .page_b_address = 0x0800FE80,
-    .page_size      = 128,
+FlashStore_IO io = {
+    .read = my_read, .erase = my_erase, .program = my_program,
 };
-FlashStore_Init(&store, &cfg);
-FlashStore_Save(&store, data, len);   // write
-FlashStore_Load(&store, data, len);   // read
+FlashStore_Config cfg = {
+    .io = &io, .page_a_address = 0x0800FE00, .page_b_address = 0x0800FE80,
+    .page_size = 128,
+};
+FlashStore_Save(&cfg, data, len);   // write
+FlashStore_Load(&cfg, data, len);   // read
 ```
 
 > Need encryption? Use [ChaCha20](src/chacha20.c) — RFC 8439, stream cipher, no alignment requirements. Cortex-M0 -Os: 700B Flash + ~200B stack, 0 static RAM. For extreme resource savings, [XXTEA](src/xxtea.c) — obfuscation only, requires 4-byte alignment and ≥8 bytes. Encrypt externally: `encrypt → FlashStore_Save` / `FlashStore_Load → decrypt`.
@@ -81,16 +91,6 @@ Save:  A first → B second     Load: read both → CRC check → return good �
 | 4 | length (4B) | Payload size |
 | 8 | crc32 (4B) | Payload CRC32 |
 
-## Resource usage (Cortex-M0 -Os measured)
-
-| Module | Flash | Static RAM | Stack |
-|------|-------|----------|-----|
-| flash_store | 596 bytes | 28 bytes | ~20 bytes |
-| chacha20 | 700 bytes | 0 | ~200 bytes |
-| xxtea | 737 bytes | 0 | ~0 |
-
-> flash_store breakdown: Load 158B / Init 108B / load_page 104B / save_page 92B / Save 66B / CRC32 52B. Link what you use.
-
 ## Status codes
 
 | Return | Meaning |
@@ -107,7 +107,7 @@ Save:  A first → B second     Load: read both → CRC check → return good �
 cmake -S . -B build && cmake --build build && ./build/flash_store_tests.exe
 ```
 
-9 tests: round-trip, corrupt A falls back to B, corrupt B repaired from A, CRC staleness detection, both pages corrupt, repair failure warning, arg validation, MaxDataSize.
+10 tests: round-trip, A corrupt→B, B corrupt→repair, A-write-fail, CRC-staleness, both corrupt, MaxDataSize, Save/Load arg check, ConfigCheck, repair-failed.
 
 ## License
 

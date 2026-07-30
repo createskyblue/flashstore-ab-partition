@@ -17,26 +17,21 @@ typedef struct {
     bool (*read)(void *context, uint32_t address, uint8_t *output, size_t length);
     bool (*erase)(void *context, uint32_t address, size_t length);
     bool (*program)(void *context, uint32_t address, const uint8_t *data, size_t length);
+    void *context;
 } FlashStore_IO;
 
 typedef struct {
-    FlashStore_IO  io;
-    void          *context;
-    uint32_t       page_a_address;
-    uint32_t       page_b_address;
-    size_t         page_size;
+    const FlashStore_IO *io;
+    uint32_t             page_a_address;
+    uint32_t             page_b_address;
+    size_t               page_size;
 } FlashStore_Config;
 
-typedef struct {
-    FlashStore_Config config;
-} FlashStore;
-
-FlashStore_Status FlashStore_Init(FlashStore *store,
-                                  const FlashStore_Config *config);
-FlashStore_Status FlashStore_Save(FlashStore *store,
+FlashStore_Status FlashStore_ConfigCheck(const FlashStore_Config *config);
+FlashStore_Status FlashStore_Save(const FlashStore_Config *config,
                                   const uint8_t *data, size_t size);
-FlashStore_Status FlashStore_Load(FlashStore *store,
+FlashStore_Status FlashStore_Load(const FlashStore_Config *config,
                                   uint8_t *data, size_t size);
-size_t FlashStore_MaxDataSize(const FlashStore *store);
+size_t FlashStore_MaxDataSize(const FlashStore_Config *config);
 
 #endif

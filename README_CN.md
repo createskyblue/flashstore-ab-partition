@@ -2,7 +2,9 @@
 
 # FlashStore A/B Partition
 
-A/B 双页 Flash 存储，面向小型 MCU。零依赖，28 bytes RAM。
+A/B 双页 Flash 存储，面向小型 MCU。零依赖，无状态。
+
+https://github.com/createskyblue/flashstore-ab-partition
 
 **选哪个？**
 
@@ -13,8 +15,17 @@ A/B 双页 Flash 存储，面向小型 MCU。零依赖，28 bytes RAM。
 | 读写方式 | Save/Load 整块 | Set/Get 按 key | Open/Read/Write |
 | 磨损均衡 | ❌ | ✅ | ✅ |
 | 掉电保护 | ✅ 双页冗余 | ✅ 事务日志 | ✅ |
-| RAM | 28 bytes | 极低 | 较高（缓冲区） |
 | 适用 | 配置参数，低频更新 | 多配置项独立读写 | 文件、日志、大块数据 |
+
+## 资源占用（Cortex-M0 -Os 实测）
+
+| 模块 | Flash | 静态 RAM | 栈 |
+|------|-------|----------|-----|
+| flash_store | 500 bytes | 0 | ~20 bytes |
+| chacha20（可选） | 700 bytes | 0 | ~200 bytes |
+| xxtea（可选） | 737 bytes | 0 | ~0 |
+
+> flash_store 明细：Load 158B / load_page 108B / save_page 100B / Save 66B / CRC32 52B / MaxDataSize 16B。按需链接，不用就不占。
 
 ## 5 分钟接入
 
@@ -39,16 +50,15 @@ bool my_program(void *ctx, uint32_t addr, const uint8_t *data, size_t len) {
 3. 初始化并读写：
 
 ```c
-FlashStore store;
-FlashStore_Config cfg = {
-    .io.read = my_read, .io.erase = my_erase, .io.program = my_program,
-    .page_a_address = 0x0800FE00,
-    .page_b_address = 0x0800FE80,
-    .page_size      = 128,
+FlashStore_IO io = {
+    .read = my_read, .erase = my_erase, .program = my_program,
 };
-FlashStore_Init(&store, &cfg);
-FlashStore_Save(&store, data, len);   // 写
-FlashStore_Load(&store, data, len);   // 读
+FlashStore_Config cfg = {
+    .io = &io, .page_a_address = 0x0800FE00, .page_b_address = 0x0800FE80,
+    .page_size = 128,
+};
+FlashStore_Save(&cfg, data, len);   // 写
+FlashStore_Load(&cfg, data, len);   // 读
 ```
 
 > 需要加密？推荐 [ChaCha20](src/chacha20.c)——RFC 8439 标准，流密码不分块不要求对齐。实测 Cortex-M0 -Os：700B Flash + ~200B 栈，0 静态 RAM。极致省资源用 [XXTEA](src/xxtea.c)，仅混淆级别，要求 4 字节对齐且 ≥8 字节。加密在外部做：`encrypt → FlashStore_Save` / `FlashStore_Load → decrypt`。
@@ -81,16 +91,6 @@ Save:  A 先 → B 后     Load: 读两页 → CRC 验 → 返回好的 → 顺�
 | 4 | length (4B) | payload 大小 |
 | 8 | crc32 (4B) | payload CRC32 |
 
-## 资源占用（Cortex-M0 -Os 实测）
-
-| 模块 | Flash | 静态 RAM | 栈 |
-|------|-------|----------|-----|
-| flash_store | 596 bytes | 28 bytes | ~20 bytes |
-| chacha20 | 700 bytes | 0 | ~200 bytes |
-| xxtea | 737 bytes | 0 | ~0 |
-
-> flash_store 明细：Load 158B / Init 108B / load_page 104B / save_page 92B / Save 66B / CRC32 52B。按需链接，不用就不占。
-
 ## 状态码
 
 | 返回值 | 含义 |
@@ -107,7 +107,7 @@ Save:  A 先 → B 后     Load: 读两页 → CRC 验 → 返回好的 → 顺�
 cmake -S . -B build && cmake --build build && ./build/flash_store_tests.exe
 ```
 
-9 个测试覆盖：正常读写、A 坏回退 B、B 坏从 A 修、CRC 裁决新旧、双页全坏、修复失败告警、参数校验、MaxDataSize。
+10 个测试覆盖：正常读写、A 坏回退 B、B 坏从 A 修、A 写失败保 B、CRC 裁决新旧、双页全坏、MaxDataSize、Save/Load 参数校验、ConfigCheck、修复失败告警。
 
 ## License
 
