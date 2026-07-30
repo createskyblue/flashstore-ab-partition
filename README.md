@@ -4,9 +4,16 @@ A/B 双页 Flash 存储，面向小型 MCU。零依赖，28 bytes RAM。
 
 **选哪个？**
 
-1. **FlashStore** — 几十~几百字节配置，低频更新，要可靠不丢。28 bytes RAM，无依赖。
-2. **[FlashDB](https://github.com/armink/FlashDB)** — 键值对存储，需要磨损均衡，多个配置项独立读写。
-3. **[LittleFS](https://github.com/littlefs-project/littlefs)** — 存文件、存日志、大块数据顺序写，需要文件系统接口。
+| | FlashStore | FlashDB | LittleFS |
+|------|------------|---------|----------|
+| 定位 | 单块配置可靠存储 | 嵌入式键值数据库 | 嵌入式文件系统 |
+| 数据模型 | 整块二进制 | 键值对 | 文件 |
+| 读写方式 | Save/Load 整块 | Set/Get 按 key | Open/Read/Write |
+| 磨损均衡 | ❌ | ✅ | ✅ |
+| 掉电保护 | ✅ 双页冗余 | ✅ 事务日志 | ✅ |
+| RAM | 28 bytes | 极低 | 较高（缓冲区） |
+| 适用 | 配置参数，低频更新 | 多配置项独立读写 | 文件、日志、大块数据 |
+
 
 ## 5 分钟接入
 
@@ -43,7 +50,7 @@ FlashStore_Save(&store, data, len);   // 写
 FlashStore_Load(&store, data, len);   // 读
 ```
 
-> 要加密？在外部做：`xxtea_encrypt(data, len, key)` → `FlashStore_Save` → `FlashStore_Load` → `xxtea_decrypt(data, len, key)`。仓库附带独立 [XXTEA](src/xxtea.c)。
+> 要加密？在外部做：`xxtea_encrypt(data, len, key)` → `FlashStore_Save` → `FlashStore_Load` → `xxtea_decrypt(data, len, key)`。仓库附带独立 [XXTEA](src/xxtea.c)，测试里有加解密用法。
 
 ## 为什么不会丢数据
 
