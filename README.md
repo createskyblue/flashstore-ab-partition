@@ -1,41 +1,42 @@
+[中文](README_CN.md)
+
 # FlashStore A/B Partition
 
-A/B 双页 Flash 存储，面向小型 MCU。零依赖，28 bytes RAM。
+A/B dual-page flash storage for small MCUs. Zero dependencies. 28 bytes RAM.
 
-**选哪个？**
+**Which to choose?**
 
 | | FlashStore | FlashDB | LittleFS |
 |------|------------|---------|----------|
-| 定位 | 单块配置可靠存储 | 嵌入式键值数据库 | 嵌入式文件系统 |
-| 数据模型 | 整块二进制 | 键值对 | 文件 |
-| 读写方式 | Save/Load 整块 | Set/Get 按 key | Open/Read/Write |
-| 磨损均衡 | ❌ | ✅ | ✅ |
-| 掉电保护 | ✅ 双页冗余 | ✅ 事务日志 | ✅ |
-| RAM | 28 bytes | 极低 | 较高（缓冲区） |
-| 适用 | 配置参数，低频更新 | 多配置项独立读写 | 文件、日志、大块数据 |
+| Purpose | Single-blob reliable storage | Embedded key-value DB | Embedded file system |
+| Data model | Binary blob | Key-value pairs | Files |
+| I/O | Save/Load whole blob | Set/Get by key | Open/Read/Write |
+| Wear leveling | ❌ | ✅ | ✅ |
+| Power-loss safe | ✅ Dual-page | ✅ Transaction log | ✅ |
+| RAM | 28 bytes | Very low | Higher (buffers) |
+| Best for | Config data, infrequent writes | Multiple KVs, independent updates | Files, logs, large data |
 
+## Quick start
 
-## 5 分钟接入
-
-1. 复制 `include/flash_store.h`、`src/flash_store.c`。需要加密再加 `chacha20` 或 `xxtea`
-2. 实现 3 个回调：
+1. Copy `include/flash_store.h` and `src/flash_store.c` into your project. Add `chacha20` or `xxtea` if you need encryption.
+2. Implement 3 callbacks:
 
 ```c
 bool my_read(void *ctx, uint32_t addr, uint8_t *out, size_t len) {
-    memcpy(out, (void *)(uintptr_t)addr, len);  // 或 HAL 读
+    memcpy(out, (void *)(uintptr_t)addr, len);  // or HAL read
     return true;
 }
 bool my_erase(void *ctx, uint32_t addr, size_t len) {
-    HAL_FLASH_ErasePage(addr);                  // 整页擦除
+    HAL_FLASH_ErasePage(addr);                  // full page erase
     return true;
 }
 bool my_program(void *ctx, uint32_t addr, const uint8_t *data, size_t len) {
-    // 按 word 编程，或 memcpy（支持字节寻址的 flash）
+    // word-by-word program, or memcpy if byte-addressable flash
     return true;
 }
 ```
 
-3. 初始化并读写：
+3. Init and go:
 
 ```c
 FlashStore store;
@@ -46,67 +47,67 @@ FlashStore_Config cfg = {
     .page_size      = 128,
 };
 FlashStore_Init(&store, &cfg);
-FlashStore_Save(&store, data, len);   // 写
-FlashStore_Load(&store, data, len);   // 读
+FlashStore_Save(&store, data, len);   // write
+FlashStore_Load(&store, data, len);   // read
 ```
 
-> 需要加密？推荐 [ChaCha20](src/chacha20.c)——RFC 8439 标准，流密码不分块不要求对齐。实测 Cortex-M0 -Os：700B Flash + ~200B 栈，0 静态 RAM。极致省资源用 [XXTEA](src/xxtea.c)，仅混淆级别，要求 4 字节对齐且 ≥8 字节。加密在外部做：`encrypt → FlashStore_Save` / `FlashStore_Load → decrypt`。
+> Need encryption? Use [ChaCha20](src/chacha20.c) — RFC 8439, stream cipher, no alignment requirements. Cortex-M0 -Os: 700B Flash + ~200B stack, 0 static RAM. For extreme resource savings, [XXTEA](src/xxtea.c) — obfuscation only, requires 4-byte alignment and ≥8 bytes. Encrypt externally: `encrypt → FlashStore_Save` / `FlashStore_Load → decrypt`.
 
-## 为什么不会丢数据
+## Why data won't get lost
 
-**A 写完才写 B。** 任意时刻断电，至少一份完整数据在 flash 上。
+**A is written before B.** At any power-loss moment, at least one valid copy exists in flash.
 
 ```
-Save:  A 先 → B 后     Load: 读两页 → CRC 验 → 返回好的 → 顺手修坏的
+Save:  A first → B second     Load: read both → CRC check → return good → repair bad
 ```
 
-| 断电在… | A | B | Load 结果 |
+| Power loss at… | A | B | Load result |
 |---------|----|----|----------|
-| 空闲 | v2 | v2 | 返回 v2 |
-| 写 A 中途 | 坏 | v1 | 返回 v1，修 A |
-| A 完成，B 前 | v2 (CRC=c2) | v1 (CRC=c1) | CRC 不同→A 新→返回 v2，修 B |
-| 写 B 中途 | v2 | 坏 | 返回 v2，下次修 B |
-| 两页都坏 | 坏 | 坏 | `ERROR_NO_VALID_DATA` |
+| Idle | v2 | v2 | Returns v2 |
+| Writing A | bad | v1 | Returns v1, repairs A |
+| A done, before B | v2 (CRC=c2) | v1 (CRC=c1) | CRC differ → A is newer → returns v2, repairs B |
+| Writing B | v2 | bad | Returns v2, repairs B next time |
+| Both pages bad | bad | bad | `ERROR_NO_VALID_DATA` |
 
-> `WARN_REPAIR_FAILED`？修复时 erase/program 失败，正常不会发生——收到应检查硬件。
+> `WARN_REPAIR_FAILED`? Means erase/program failed during repair. Should not happen in normal operation — check your hardware or IO.
 
-## Header 结构
+## Header layout
 
-每页 12 字节 header + payload：
+12-byte header + payload per page:
 
-| 偏移 | 字段 | 含义 |
+| Offset | Field | Description |
 |------|------|------|
 | 0 | magic (4B) | `0x46534142` |
-| 4 | length (4B) | payload 大小 |
-| 8 | crc32 (4B) | payload CRC32 |
+| 4 | length (4B) | Payload size |
+| 8 | crc32 (4B) | Payload CRC32 |
 
-## 资源占用（Cortex-M0 -Os 实测）
+## Resource usage (Cortex-M0 -Os measured)
 
-| 模块 | Flash | 静态 RAM | 栈 |
+| Module | Flash | Static RAM | Stack |
 |------|-------|----------|-----|
 | flash_store | 596 bytes | 28 bytes | ~20 bytes |
 | chacha20 | 700 bytes | 0 | ~200 bytes |
 | xxtea | 737 bytes | 0 | ~0 |
 
-> flash_store 明细：Load 158B / Init 108B / load_page 104B / save_page 92B / Save 66B / CRC32 52B。按需链接，不用就不占。
+> flash_store breakdown: Load 158B / Init 108B / load_page 104B / save_page 92B / Save 66B / CRC32 52B. Link what you use.
 
-## 状态码
+## Status codes
 
-| 返回值 | 含义 |
+| Return | Meaning |
 |--------|------|
-| `OK` | 正常 |
-| `ERROR_ARGUMENT` | 参数错误 |
-| `ERROR_WRITE` | 擦除或编程失败 |
-| `ERROR_NO_VALID_DATA` | 两页都坏了 |
-| `WARN_REPAIR_FAILED` | 数据正确但冗余修复失败 |
+| `OK` | Success |
+| `ERROR_ARGUMENT` | Bad parameter |
+| `ERROR_WRITE` | Erase or program failed |
+| `ERROR_NO_VALID_DATA` | Both pages are corrupt |
+| `WARN_REPAIR_FAILED` | Data OK but redundancy not restored |
 
-## 测试
+## Tests
 
 ```bash
 cmake -S . -B build && cmake --build build && ./build/flash_store_tests.exe
 ```
 
-9 个测试覆盖：正常读写、A 坏回退 B、B 坏从 A 修、CRC 裁决新旧、双页全坏、修复失败告警、参数校验、MaxDataSize。
+9 tests: round-trip, corrupt A falls back to B, corrupt B repaired from A, CRC staleness detection, both pages corrupt, repair failure warning, arg validation, MaxDataSize.
 
 ## License
 
