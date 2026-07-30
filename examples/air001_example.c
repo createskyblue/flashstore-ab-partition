@@ -1,4 +1,5 @@
 #include "flash_store.h"
+#include "xxtea.h"
 
 #include "air001xx_hal.h"
 
@@ -15,6 +16,11 @@ enum {
 #define FLASH_PAGE_B_ADDRESS (FLASH_BASE_ADDRESS + FLASH_TOTAL_SIZE - 2u * FLASH_PAGE_SIZE)
 
 _Alignas(uint32_t) static uint8_t workspace[FLASH_PAGE_SIZE];
+
+/* 128-bit XXTEA key — replace with your own */
+static const uint32_t cipher_key[4] = {
+    0x12345678u, 0x9ABCDEF0u, 0x0FEDCBA9u, 0x87654321u
+};
 
 static bool air001_read(void *context, uint32_t address, uint8_t *output, size_t length) {
     (void)context;
@@ -80,6 +86,9 @@ void app_settings_example(void) {
         .page_size = FLASH_PAGE_SIZE,
         .workspace = workspace,
         .workspace_size = sizeof(workspace),
+        .encrypt    = xxtea_encrypt,
+        .decrypt    = xxtea_decrypt,
+        .cipher_key = cipher_key,
     };
 
     AppSettings settings = {
@@ -92,6 +101,6 @@ void app_settings_example(void) {
         return;
     }
 
-    (void)FlashStore_Save(&store, 0x12345678u, (const uint8_t *)&settings, sizeof(settings));
-    (void)FlashStore_Load(&store, 0x12345678u, (uint8_t *)&settings, sizeof(settings));
+    (void)FlashStore_Save(&store, (const uint8_t *)&settings, sizeof(settings));
+    (void)FlashStore_Load(&store, (uint8_t *)&settings, sizeof(settings));
 }
